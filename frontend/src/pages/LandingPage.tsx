@@ -251,12 +251,12 @@ function PoolCard({ pool, onViewDetails }: PoolCardProps) {
         <div className="flex flex-col gap-2">
           <div className="flex justify-between text-[11px] font-medium text-[#6b7280]">
             <span>Drought Streak progress:</span>
-            <span className="text-[#d97706] font-mono">{visualStreakDays.toString()} of {pool.consecutive_days_required} Days</span>
+            <span className="text-[#d97706] font-mono">{dynamicConsecutiveDays?.toString()} of {pool.consecutive_days_required} Days</span>
           </div>
           <div className="h-2 bg-[#1e1e1e] rounded-full overflow-hidden">
             <div 
               className="h-full bg-[#d97706]" 
-              style={{ width: `${Math.min(100, (Number(visualStreakDays) / pool.consecutive_days_required) * 100)}%` }}
+              style={{ width: `${Math.min(100, (Number(dynamicConsecutiveDays) / pool.consecutive_days_required) * 100)}%` }}
             ></div>
           </div>
         </div>
