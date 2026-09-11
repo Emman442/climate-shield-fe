@@ -41,7 +41,6 @@ function MainAppLayout() {
   }, [currentTab]);
 
   const {data: pools, isFetching: isLoadingPools} = useFetchPools()
-
   // Query detailed data of selected pool
   const {
     data: poolDetail,

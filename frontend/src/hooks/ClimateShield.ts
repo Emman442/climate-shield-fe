@@ -38,35 +38,46 @@ export function useFetchPools() {
 }
 
 
-export function useFetchConsecutiveDroughtDays(poolId: string) {
-    const contract = useClimateShieldContract();
+export function useFetchFarmerPolicies(wallet: string | undefined, poolIds: string[]) {
+  const contract = useClimateShieldContract();
 
-    return useQuery<Number, Error>({
-        queryKey: ["drought_days", poolId],
-        queryFn: () => {
-            if (!contract) {
-                throw new Error("Contract not initialized");
-            }
-            return contract.getConsecutiveDroughtDays(poolId);
-        },
-        enabled: !!contract,
-    });
+  return useQuery<Policy[], Error>({
+    queryKey: ["farmer_policies", wallet, poolIds],
+    queryFn: () => {
+      if (!contract || !wallet) throw new Error("Contract not initialized");
+      return contract.getFarmerPolicies(wallet, poolIds);
+    },
+    enabled: !!contract && !!wallet && poolIds.length > 0,
+  });
 }
 
 export function useFetchWeatherReading(poolId: string, day: string) {
-    const contract = useClimateShieldContract();
+  const contract = useClimateShieldContract();
 
-    return useQuery<WeatherReading, Error>({
-        queryKey: ["weather_reading", poolId],
-        queryFn: () => {
-            if (!contract) {
-                throw new Error("Contract not initialized");
-            }
-            return contract.getWeatherReading(poolId, day);
-        },
-        enabled: !!contract,
-    });
+  return useQuery<WeatherReading, Error>({
+    queryKey: ["weather_reading", poolId, day],
+    queryFn: () => {
+      if (!contract) throw new Error("Contract not initialized");
+      return contract.getWeatherReading(poolId, day);
+    },
+    enabled: !!contract && !!poolId && !!day,
+  });
 }
+
+export function useFetchConsecutiveDroughtDays(poolId: string) {
+  const contract = useClimateShieldContract();
+
+  return useQuery<Number, Error>({
+    queryKey: ["drought_days", poolId],
+    queryFn: () => {
+      if (!contract) throw new Error("Contract not initialized");
+      return contract.getConsecutiveDroughtDays(poolId);
+    },
+    enabled: !!contract && !!poolId,
+  });
+}
+
+
 
 export function useFetchRecentReading(poolId: string, days: number) {
     const contract = useClimateShieldContract();
@@ -145,6 +156,8 @@ export function useFetchPoolPayouts(poolId: string) {
         enabled: !!contract,
     });
 }
+
+
 
 
 export function useCreatePool() {

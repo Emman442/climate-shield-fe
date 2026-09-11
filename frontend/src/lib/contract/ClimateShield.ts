@@ -145,6 +145,44 @@ class ClimateShield {
         }
     }
 
+    async hasPolicy(poolId: string, wallet: string): Promise<boolean> {
+  try {
+    const yes = await this.client.readContract({
+      address: this.contractAddress,
+      functionName: "has_policy",
+      args: [poolId, wallet],
+    });
+    return Boolean(yes);
+  } catch (error) {
+    console.error("Error checking policy:", error);
+    return false;
+  }
+}
+
+async getFarmerPolicy(poolId: string, wallet: string): Promise<Policy> {
+  try {
+    const policy = await this.client.readContract({
+      address: this.contractAddress,
+      functionName: "get_farmer_policy",
+      args: [poolId, wallet],
+    });
+    return policy as Policy;
+  } catch (error) {
+    console.error("Error fetching farmer policy:", error);
+    throw new Error("Failed to fetch farmer policy");
+  }
+}
+
+async getFarmerPolicies(wallet: string, poolIds: string[]): Promise<Policy[]> {
+  const out: Policy[] = [];
+  for (const poolId of poolIds) {
+    const exists = await this.hasPolicy(poolId, wallet);
+    if (!exists) continue;
+    out.push(await this.getFarmerPolicy(poolId, wallet));
+  }
+  return out;
+}
+
 
     async getRecentReadings(poolId: string, days: number): Promise<WeatherReading[]> {
         try {
