@@ -185,7 +185,9 @@ class ClimateShield(gl.Contract):
             trigger_activated_at="",
             policy_ids=[],
             reading_days=[],
-            season_end=season_end
+            season_end=season_end,
+            admin_override_reason="",
+            admin_override_at="",
         )
 
         self.pool_ids.append(pool_id)
@@ -277,11 +279,12 @@ class ClimateShield(gl.Contract):
 
         lat = p.latitude
         lon = p.longitude
-        threshold = p.drought_threshold
+        threshold_val = float(p.drought_threshold)
         recorder = str(gl.message.sender_address)
         requested_day = day
 
-        def fetch_moisture() -> str:
+        # Capture classification function inside non-deterministic scope
+        def fetch_and_classify() -> str:
             urls = [
                 (
                     "https://archive-api.open-meteo.com/v1/archive"
@@ -310,16 +313,36 @@ class ClimateShield(gl.Contract):
                     series = hours.get("soil_moisture_0_to_7cm", [])
                     vals = [float(x) for x in series if x is not None]
                     if len(vals) > 0:
-                        mean = sum(vals) / float(len(vals))
-                        return str(round(mean, 4))
+                        mean_moisture = sum(vals) / float(len(vals))
+                        
+                        # Compute drought classification independently inside non-det block
+                        if mean_moisture >= threshold_val:
+                            classification = "normal"
+                        else:
+                            ratio = mean_moisture / threshold_val
+                            if ratio >= 0.75:
+                                classification = "watch"
+                            elif ratio >= 0.50:
+                                classification = "warning"
+                            else:
+                                classification = "severe"
+                        
+                        
+                        return json.dumps({
+                            "moisture": str(round(mean_moisture, 4)),
+                            "drought_index": classification
+                        })
                 except Exception:
                     last_keys = "fetch_or_parse_failed"
                     continue
             assert False, f"No moisture in API keys={last_keys}"
 
-        moisture_s = gl.eq_principle.strict_eq(fetch_moisture)
-        moisture_val = float(moisture_s)
-        drought_index = self._classify_drought(moisture_val, float(threshold))
+    
+        consensus_result_json = gl.eq_principle.strict_eq(fetch_and_classify)
+        parsed_result = json.loads(consensus_result_json)
+        
+        moisture_s = str(parsed_result["moisture"])
+        drought_index = str(parsed_result["drought_index"])
 
         self.readings[reading_key] = WeatherReading(
             day=day,
@@ -456,25 +479,39 @@ class ClimateShield(gl.Contract):
 
     @gl.public.write
     def admin_trigger_payout(
-    self,
-    pool_id: str,
-    reason: str,
-    evidence_url: str
+        self,
+        pool_id: str,
+        reason: str,
+        evidence_url: str
     ) -> None:
         self._only_admin()
         assert pool_id in self.pools, "Pool not found"
         p = self.pools[pool_id]
         assert p.status == "active", "Pool not active"
         assert len(reason) >= 20, "Reason must be at least 20 characters"
-        assert evidence_url.startswith("http"), "Evidence URL required"
-        assert len(evidence_url) > 0, "Must provide evidence URL for admin override"
+        assert evidence_url.startswith("http://") or evidence_url.startswith("https://"), "Valid HTTP/HTTPS evidence URL required"
+
+        target_url = evidence_url
+
+        def verify_evidence() -> str:
+            try:
+                res = gl.nondet.web.get(target_url)
+                if res.status == 200 and len(res.body) > 0:
+                    return "VERIFIED"
+                return f"FAILED_STATUS_{res.status}"
+            except Exception as e:
+                return f"FETCH_ERROR_{str(e)}"
+
+        verification_status = gl.eq_principle.strict_eq(verify_evidence)
+        assert verification_status == "VERIFIED", f"Evidence verification failed: {verification_status}"
 
         self.pools[pool_id].admin_override_reason = reason
+        self.pools[pool_id].admin_override_evidence = evidence_url
         self.pools[pool_id].admin_override_at = gl.message_raw["datetime"]
 
         reading_key = self._reading_key(pool_id, f"admin_override_{gl.message_raw['datetime']}")
         self.readings[reading_key] = WeatherReading(
-            day=f"admin_override",
+            day="admin_override",
             soil_moisture="admin_override",
             drought_index="severe",
             recorded_at=gl.message_raw["datetime"],
@@ -519,7 +556,6 @@ class ClimateShield(gl.Contract):
             refund_wei = u256(refund) * u256(10**18)
             _Recipient(Address(farmer)).emit_transfer(value=refund_wei)
 
-    # ─── Read Methods ─────────────────────────────────────────
 
     @gl.public.view
     def get_pool(self, pool_id: str) -> Pool:

@@ -3,7 +3,8 @@ import { useApp } from '../context/AppContext';
 import { Pool, Policy } from '../lib/contract/types';
 import { AlertTriangle, Plus, Database, ShieldAlert, Settings, RefreshCw, Layers } from 'lucide-react';
 import { useWallet } from '../lib/genlayer/wallet';
-import { useCreatePool, useFundVault, useTriggerEmergencyPayout } from '../hooks/ClimateShield';
+import { useCreatePool, useFetchConsecutiveDroughtDays, useFundVault, useTriggerEmergencyPayout } from '../hooks/ClimateShield';
+import  PoolRegistryRow  from './PoolRegistry';
 
 interface AdminPageProps {
   pools: Pool[];
@@ -32,11 +33,12 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
   const [fundAmount, setFundAmount] = useState('');
   const [triggerPoolId, setTriggerPoolId] = useState('');
   const [triggerReason, setTriggerReason] = useState('');
+  const [evidenceUrl, setEvidenceUrl] = useState('');
   const [confirmText, setConfirmText] = useState('');
   const [showTriggerConfirm, setShowTriggerConfirm] = useState(false);
   const { isPending: isCreatingPool, mutate: createPool } = useCreatePool()
-  const {isPending: isFundingVault, mutate: fundVault} = useFundVault()
-  const {isPending: isTriggeringEmergencyPayout, mutate: triggerEmergencyPayout} = useTriggerEmergencyPayout()
+  const { isPending: isFundingVault, mutate: fundVault } = useFundVault()
+  const { isPending: isTriggeringEmergencyPayout, mutate: triggerEmergencyPayout } = useTriggerEmergencyPayout()
 
   // Load initial select box values
   useEffect(() => {
@@ -164,7 +166,8 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
 
     triggerEmergencyPayout({
       poolId: triggerPoolId,
-      reason: triggerReason
+      reason: triggerReason,
+      evidence_url: evidenceUrl
     }, {
       onSuccess: () => {
         showToast("Emergency Payout Triggered Successfully!", "success")
@@ -196,13 +199,7 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
               Create geographic coverage pools, monitor active vaults, and issue emergency manual override payouts.
             </p>
           </div>
-          <button
-            // onClick={handleResetSimulation}
-            className="px-4 py-2 bg-[#1e1e1e] hover:bg-[#dc2626] border border-[#1e1e1e] hover:border-[#dc2626] text-white text-xs font-bold rounded-[4px] transition-all cursor-pointer flex items-center gap-2"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Reset Simulation State
-          </button>
+
         </div>
 
         {/* Top forms split */}
@@ -242,7 +239,7 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
                   />
                   <button
                     type="button"
-                    className="mt-1 text-[10px] text-[#6b7280] hover:text-[#22c55e] font-semibold transition-colors cursor-pointer" 
+                    className="mt-1 text-[10px] text-[#6b7280] hover:text-[#22c55e] font-semibold transition-colors cursor-pointer"
                     onClick={handleFindCoordinates}
                   >
                     Find Coordinates
@@ -365,7 +362,7 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
               </div>
 
               <button
-              disabled={isCreatingPool}
+                disabled={isCreatingPool}
                 type="submit"
                 className="w-full py-2.5 bg-[#16a34a] hover:bg-[#22c55e] text-white font-bold text-sm rounded-[4px] tracking-tight cursor-pointer transition-colors"
               >
@@ -453,6 +450,17 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
                   />
                 </div>
 
+                <div>
+                  <label className="block text-[#6b7280] font-semibold mb-1">Evidence URL</label>
+                  <input
+                    placeholder="Provide a link to the evidence supporting the override."
+                    value={evidenceUrl}
+                    onChange={(e) => setEvidenceUrl(e.target.value)}
+                    className="w-full p-2 bg-[#141414] border border-[#1e1e1e] rounded-[4px] text-white resize-none focus:outline-none focus:border-[#dc2626]"
+                    required
+                  />
+                </div>
+
                 {showTriggerConfirm ? (
                   <div className="space-y-3 p-3 border border-red-900/40 bg-red-950/20 rounded-[4px]">
                     <p className="text-[10px] text-[#dc2626] leading-normal font-semibold">
@@ -469,9 +477,10 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
                       <button
                         type="submit"
                         disabled={confirmText !== 'CONFIRM'}
+                        
                         className="flex-1 py-1.5 bg-[#dc2626] hover:bg-red-700 disabled:bg-[#1e1e1e] text-white text-[11px] font-bold rounded-[3px] transition-colors cursor-pointer"
                       >
-                        Submit Payout
+                        {isTriggeringEmergencyPayout ? 'Submitting Payout...' : 'Submit Payout'}
                       </button>
                       <button
                         type="button"
@@ -526,34 +535,11 @@ export default function AdminPage({ pools, isLoadingPools, setCurrentTab, setSel
                   </thead>
                   <tbody className="divide-y divide-[#1e1e1e]/50 font-mono">
                     {pools.map((pool) => (
-                      <tr key={pool.pool_id} className="hover:bg-[#141414]/40">
-                        <td className="p-3 text-white font-bold font-sans">{pool.name}</td>
-                        <td className="p-3 text-[#6b7280] font-sans">{pool.region_name}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold font-sans ${pool.status === 'open'
-                            ? 'bg-[#14532d] text-[#22c55e]'
-                            : pool.status === 'active'
-                              ? 'border border-[#16a34a] text-[#16a34a]'
-                              : pool.status === 'triggered'
-                                ? 'bg-[#dc2626] text-white'
-                                : 'bg-gray-700 text-gray-300'
-                            }`}>
-                            {pool.status}
-                          </span>
-                        </td>
-                        <td className="p-3 text-white">
-                          {pool.drought_threshold??0} / {pool.consecutive_days_required} days
-                        </td>
-                        <td className="p-3 text-[#22c55e] font-bold">{pool.vault_balance} GEN</td>
-                        <td className="p-3 text-right font-sans">
-                          <button
-                            onClick={() => handleViewPool(pool.pool_id)}
-                            className="text-xs font-semibold text-[#16a34a] hover:text-[#22c55e] cursor-pointer"
-                          >
-                            Manage
-                          </button>
-                        </td>
-                      </tr>
+                      <PoolRegistryRow
+                        key={pool.pool_id}
+                        pool={pool}
+                        onManage={handleViewPool}
+                      />
                     ))}
                   </tbody>
                 </table>

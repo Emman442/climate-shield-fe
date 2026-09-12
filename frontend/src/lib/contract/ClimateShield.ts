@@ -385,14 +385,15 @@ async getFarmerPolicies(wallet: string, poolIds: string[]): Promise<Policy[]> {
 
     async TriggerEmergencyPayout(
         pool_id: string,
-        reason: string
+        reason: string,
+        evidence_url: string
     ) {
         await this.client.connect("studionet");
         try {
             const txHash = await this.client.writeContract({
                 address: this.contractAddress,
                 functionName: "admin_trigger_payout",
-                args: [pool_id, reason],
+                args: [pool_id, reason, evidence_url],
                 value: BigInt(0)
             });
 

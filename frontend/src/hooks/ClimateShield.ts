@@ -336,16 +336,18 @@ export function useTriggerEmergencyPayout() {
     return useMutation({
         mutationFn: async ({
             poolId,
-            reason
+            reason,
+            evidence_url
         }: {
             poolId: string
-            reason: string
+            reason: string,
+            evidence_url: string
         }) => {
             if (!contract) {
                 throw new Error("Contract not initialized");
             }
 
-            const receipt = await contract.TriggerEmergencyPayout(poolId, reason);
+            const receipt = await contract.TriggerEmergencyPayout(poolId, reason, evidence_url);
             console.log("Trigger emergency payout tx receipt:", receipt);
             return receipt;
         },
