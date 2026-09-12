@@ -14,8 +14,6 @@ class _Recipient:
         pass
 
 
-# ─── Data Structures ──────────────────────────────────────────
-
 @allow_storage
 @dataclass
 class Policy:
@@ -74,6 +72,8 @@ class Pool:
     policy_ids: DynArray[str]
     reading_days: DynArray[str]
     season_end: i64
+    admin_override_reason: str
+    admin_override_at: str
 
 
 class ClimateShield(gl.Contract):
@@ -369,7 +369,6 @@ class ClimateShield(gl.Contract):
         return False
     
     
-    # ─── Execute Payouts ──────────────────────────────────────
 
     def _execute_payouts(
         self,
@@ -382,7 +381,6 @@ class ClimateShield(gl.Contract):
         coverage = int(p.coverage_per_policy)
         vault = int(p.vault_balance)
 
-        # Calculate how many farmers we can fully pay
         eligible = []
         for pid in policy_ids:
             policy = self.policies[pid]
@@ -391,7 +389,6 @@ class ClimateShield(gl.Contract):
 
         total_needed = coverage * len(eligible)
 
-        # If vault cannot cover everyone, pay proportionally
         if total_needed > vault:
             per_farmer = vault // len(eligible) if eligible else 0
         else:
@@ -458,31 +455,34 @@ class ClimateShield(gl.Contract):
 
 
     @gl.public.write
-    def admin_trigger_payout(self, pool_id: str, reason: str) -> None:
+    def admin_trigger_payout(
+    self,
+    pool_id: str,
+    reason: str,
+    evidence_url: str
+    ) -> None:
         self._only_admin()
         assert pool_id in self.pools, "Pool not found"
         p = self.pools[pool_id]
         assert p.status == "active", "Pool not active"
-        assert len(reason) >= 20, "Write why this override is needed"
+        assert len(reason) >= 20, "Reason must be at least 20 characters"
+        assert evidence_url.startswith("http"), "Evidence URL required"
+        assert len(evidence_url) > 0, "Must provide evidence URL for admin override"
 
-        required_days = int(p.consecutive_days_required)
-        all_days = list(p.reading_days)
-        assert len(all_days) >= required_days, "Not enough readings for an override"
+        self.pools[pool_id].admin_override_reason = reason
+        self.pools[pool_id].admin_override_at = gl.message_raw["datetime"]
 
-        recent_days = all_days[-required_days:]
-        drought_days = 0
-        for day in recent_days:
-            rkey = self._reading_key(pool_id, day)
-            assert rkey in self.readings, "Missing reading"
-            if self.readings[rkey].drought_index in ["severe", "warning"]:
-                drought_days += 1
-
-        assert drought_days >= required_days, "Override still needs the same drought streak"
-
-        self._execute_payouts(pool_id, recent_days, drought_days)
-        self.pools[pool_id].trigger_activated_at = (
-            str(gl.message_raw["datetime"]) + "|admin:" + reason[:180]
+        reading_key = self._reading_key(pool_id, f"admin_override_{gl.message_raw['datetime']}")
+        self.readings[reading_key] = WeatherReading(
+            day=f"admin_override",
+            soil_moisture="admin_override",
+            drought_index="severe",
+            recorded_at=gl.message_raw["datetime"],
+            recorded_by=str(gl.message.sender_address)
         )
+
+        recent_days = list(p.reading_days[-7:]) if len(p.reading_days) >= 7 else list(p.reading_days)
+        self._execute_payouts(pool_id, recent_days, len(recent_days))
 
     # ─── Cancel Policy & Refund (before trigger) ─────────────
 
