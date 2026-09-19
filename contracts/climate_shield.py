@@ -55,17 +55,17 @@ class Pool:
     name: str
     description: str
     region_name: str
-    latitude: str           
-    longitude: str   
-    radius_km: str   
-    drought_threshold: str 
-    consecutive_days_required: i32 
+    latitude: str
+    longitude: str
+    radius_km: str
+    drought_threshold: str
+    consecutive_days_required: i32
     premium_per_policy: i32
     coverage_per_policy: i32
     max_policies: i32
     total_policies: i32
     vault_balance: i32
-    status: str             # "open" | "active" | "triggered" | "closed"
+    status: str             # "open" | "active" | "triggered" | "closed" | "expired"
     created_at: str
     created_by: str
     trigger_activated_at: str
@@ -73,6 +73,7 @@ class Pool:
     reading_days: DynArray[str]
     season_end: i64
     admin_override_reason: str
+    admin_override_evidence: str
     admin_override_at: str
 
 
@@ -94,7 +95,6 @@ class ClimateShield(gl.Contract):
     payouts: TreeMap[str, PayoutRecord]
     payout_counter: i32
 
-    
     farmer_pool_policy: TreeMap[str, str]
 
     # Admin
@@ -131,7 +131,6 @@ class ClimateShield(gl.Contract):
     def _tx_day(self) -> str:
         raw = str(gl.message_raw["datetime"])
         return raw[:10]
-
 
     @gl.public.write
     def create_pool(
@@ -187,6 +186,7 @@ class ClimateShield(gl.Contract):
             reading_days=[],
             season_end=season_end,
             admin_override_reason="",
+            admin_override_evidence="",
             admin_override_at="",
         )
 
@@ -199,7 +199,6 @@ class ClimateShield(gl.Contract):
         assert pool_id in self.pools, "Pool not found"
         assert self.pools[pool_id].status == "open", "Pool not open"
         self.pools[pool_id].status = "closed"
-
 
     @gl.public.write.payable
     def buy_policy(self, pool_id: str) -> str:
@@ -265,7 +264,6 @@ class ClimateShield(gl.Contract):
 
     # ─── Record Daily Weather Reading ─────────────────────────
 
-
     @gl.public.write
     def record_daily_reading(self, pool_id: str, day: str) -> None:
         assert pool_id in self.pools, "Pool not found"
@@ -314,7 +312,7 @@ class ClimateShield(gl.Contract):
                     vals = [float(x) for x in series if x is not None]
                     if len(vals) > 0:
                         mean_moisture = sum(vals) / float(len(vals))
-                        
+
                         # Compute drought classification independently inside non-det block
                         if mean_moisture >= threshold_val:
                             classification = "normal"
@@ -326,8 +324,7 @@ class ClimateShield(gl.Contract):
                                 classification = "warning"
                             else:
                                 classification = "severe"
-                        
-                        
+
                         return json.dumps({
                             "moisture": str(round(mean_moisture, 4)),
                             "drought_index": classification
@@ -337,10 +334,9 @@ class ClimateShield(gl.Contract):
                     continue
             assert False, f"No moisture in API keys={last_keys}"
 
-    
         consensus_result_json = gl.eq_principle.strict_eq(fetch_and_classify)
         parsed_result = json.loads(consensus_result_json)
-        
+
         moisture_s = str(parsed_result["moisture"])
         drought_index = str(parsed_result["drought_index"])
 
@@ -368,7 +364,6 @@ class ClimateShield(gl.Contract):
 
         recent_days = all_days[-required_days:]
 
-       
         from datetime import datetime as dt, timedelta
         for i in range(1, len(recent_days)):
             prev_date = dt.strptime(recent_days[i - 1], "%Y-%m-%d")
@@ -390,8 +385,6 @@ class ClimateShield(gl.Contract):
             return True
 
         return False
-    
-    
 
     def _execute_payouts(
         self,
@@ -460,10 +453,8 @@ class ClimateShield(gl.Contract):
         assert self._tx_day() >= str(p.season_end)[:10] or int(p.season_end) <= 0, (
             "Pool season not ended yet"
         )
-        # If season_end is a unix ms from create_pool, compare that too:
         day = self._tx_day()
         if int(p.season_end) > 10_000:
-            # millisecond timestamp stored at create time
             from datetime import datetime as dt, timezone as tz
             end = dt.fromtimestamp(int(p.season_end) / 1000, tz=tz.utc).strftime("%Y-%m-%d")
             assert day >= end, "Pool season not ended yet"
@@ -476,6 +467,7 @@ class ClimateShield(gl.Contract):
                 value=u256(remaining) * u256(10**18)
             )
 
+    # ─── Admin Manual Override (evidence-verified) ────────────
 
     @gl.public.write
     def admin_trigger_payout(
@@ -484,26 +476,98 @@ class ClimateShield(gl.Contract):
         reason: str,
         evidence_url: str
     ) -> None:
+        """
+        Lets the admin trigger a payout for extraordinary events the
+        automated Open-Meteo feed might miss (e.g. a flood, a government
+        drought declaration). The evidence URL's actual fetched content,
+        not just its HTTP status, is what validators judge — a page that
+        merely loads is not enough.
+        """
         self._only_admin()
         assert pool_id in self.pools, "Pool not found"
         p = self.pools[pool_id]
         assert p.status == "active", "Pool not active"
         assert len(reason) >= 20, "Reason must be at least 20 characters"
-        assert evidence_url.startswith("http://") or evidence_url.startswith("https://"), "Valid HTTP/HTTPS evidence URL required"
+        assert evidence_url.startswith("http://") or evidence_url.startswith("https://"), \
+            "Valid HTTP/HTTPS evidence URL required"
 
         target_url = evidence_url
+        region = p.region_name
+        override_reason = reason
 
         def verify_evidence() -> str:
             try:
                 res = gl.nondet.web.get(target_url)
-                if res.status == 200 and len(res.body) > 0:
-                    return "VERIFIED"
-                return f"FAILED_STATUS_{res.status}"
+                body_text = res.body.decode("utf-8", errors="ignore")[:4000]
             except Exception as e:
-                return f"FETCH_ERROR_{str(e)}"
+                return json.dumps({
+                    "verdict": "rejected",
+                    "reasoning": f"Could not fetch evidence URL: {str(e)}"
+                }, sort_keys=True, separators=(',', ':'))
 
-        verification_status = gl.eq_principle.strict_eq(verify_evidence)
-        assert verification_status == "VERIFIED", f"Evidence verification failed: {verification_status}"
+            prompt = f"""You are validating an insurance administrator's manual override
+claim for a drought/crop-failure insurance pool.
+
+Pool region: {region}
+Administrator's stated reason: "{override_reason}"
+
+Below is the raw text content fetched from the evidence URL the administrator
+supplied ({target_url}):
+
+---
+{body_text}
+---
+
+Judge strictly from the fetched content above, not the administrator's stated
+reason alone:
+1. Does this content actually describe a real drought, crop failure, or
+   comparable agricultural disaster condition?
+2. Does it plausibly concern the stated region ("{region}") or a
+   sufficiently overlapping or nearby area?
+3. Is the timing consistent with an active, ongoing, or very recent event
+   rather than historical or unrelated content?
+
+Only confirm if the fetched content itself provides real evidence. A page
+that loads successfully but contains unrelated content (or no content at
+all) must be rejected.
+
+Return ONLY valid JSON:
+{{"verdict":"confirmed","reasoning":"one or two sentences"}}
+
+verdict must be exactly one of: confirmed, rejected
+"""
+            try:
+                result = gl.nondet.exec_prompt(prompt).strip()
+                cleaned = result.replace("```json", "").replace("```", "").strip()
+                parsed = json.loads(cleaned)
+                verdict = str(parsed.get("verdict", "rejected")).lower().strip()
+                if verdict not in ["confirmed", "rejected"]:
+                    verdict = "rejected"
+                return json.dumps({
+                    "verdict": verdict,
+                    "reasoning": str(parsed.get("reasoning", ""))[:300]
+                }, sort_keys=True, separators=(',', ':'))
+            except Exception:
+                return json.dumps({
+                    "verdict": "rejected",
+                    "reasoning": "Could not evaluate evidence content"
+                }, sort_keys=True, separators=(',', ':'))
+
+        consensus_json = gl.eq_principle.prompt_non_comparative(
+            verify_evidence,
+            task="Verify whether fetched evidence content substantiates a real drought or crop-failure event for the stated pool region",
+            criteria="Confirm only if the fetched page content itself, not the administrator's stated reason, describes a real and regionally relevant disaster event. Reject a page that merely loads but is unrelated or empty."
+        )
+
+        try:
+            data = json.loads(consensus_json.strip())
+            verdict = str(data.get("verdict", "rejected")).lower().strip()
+            evidence_reasoning = str(data.get("reasoning", ""))
+        except Exception:
+            verdict = "rejected"
+            evidence_reasoning = "Evidence verdict could not be parsed"
+
+        assert verdict == "confirmed", f"Evidence verification failed: {evidence_reasoning}"
 
         self.pools[pool_id].admin_override_reason = reason
         self.pools[pool_id].admin_override_evidence = evidence_url
@@ -555,7 +619,6 @@ class ClimateShield(gl.Contract):
         if refund > 0:
             refund_wei = u256(refund) * u256(10**18)
             _Recipient(Address(farmer)).emit_transfer(value=refund_wei)
-
 
     @gl.public.view
     def get_pool(self, pool_id: str) -> Pool:
